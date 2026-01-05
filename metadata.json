@@ -1,0 +1,7 @@
+{
+  "name": "PixelMind",
+  "description": "An AI-powered image generation and enhancement platform using Gemini 2.5 Flash Image. Create stunning visuals from text or enhance existing images with advanced AI capabilities.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
