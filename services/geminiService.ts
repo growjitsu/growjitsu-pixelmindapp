@@ -5,11 +5,11 @@ import { logUsage } from "./usageService";
 import { supabase } from "../lib/supabase";
 
 /**
- * Nota Técnica: Sempre criamos uma nova instância do cliente antes da chamada
- * para garantir o uso da API Key mais recente injetada pelo diálogo de seleção.
+ * Nota TÃ©cnica: Sempre criamos uma nova instÃ¢ncia do cliente antes da chamada
+ * para garantir o uso da API Key mais recente injetada pelo diÃ¡logo de seleÃ§Ã£o.
  */
 const getGeminiClient = () => {
-  return new GoogleGenAI({ apiKey: process.env.API_KEY });
+  return new GoogleGenAI({ apiKey: process.env.API_KEY || 'FAKE_API_KEY_FOR_DEVELOPMENT' });
 };
 
 export const generateImage = async (config: GenerationConfig): Promise<string> => {
@@ -47,7 +47,7 @@ export const generateImage = async (config: GenerationConfig): Promise<string> =
         return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
       }
     }
-    throw new Error("Dados de imagem não encontrados na resposta.");
+    throw new Error("Dados de imagem nÃ£o encontrados na resposta.");
   } catch (error: any) {
     console.error("Gemini Image Generation Error:", error);
     throw new Error(error.message || "Falha ao gerar imagem.");
@@ -58,14 +58,14 @@ export const enhanceImage = async (base64Image: string, mimeType: string, config
   const ai = getGeminiClient();
   const enhancements = [];
   
-  // Mapeamento de instruções detalhadas para o modelo
+  // Mapeamento de instruÃ§Ãµes detalhadas para o modelo
   if (config.upscale) enhancements.push("increase resolution and reconstruct missing details for high definition");
   if (config.sharpen) enhancements.push("apply professional sharpening and clarify blurry edges");
   if (config.denoise) enhancements.push("remove digital noise, grain and compression artifacts");
   if (config.colorAdjust) enhancements.push("optimize dynamic range, vibrant colors and professional lighting balance");
   if (config.faceEnhance) enhancements.push("detect faces and restore skin texture, eyes and facial features with high fidelity");
 
-  // Prompt mais "autoritário" para forçar a edição da imagem
+  // Prompt mais "autoritÃ¡rio" para forÃ§ar a ediÃ§Ã£o da imagem
   const enhancementPrompt = `Act as a professional high-end photo editor. Your task is to process the attached image applying exactly these enhancements: ${enhancements.join(", ")}. 
   YOU MUST RETURN THE MODIFIED IMAGE. Do not change the fundamental composition, only improve the quality according to the instructions.`;
   
@@ -95,19 +95,19 @@ export const enhanceImage = async (base64Image: string, mimeType: string, config
       }
     }
     
-    throw new Error("O modelo não retornou a imagem processada. Tente reduzir o número de opções selecionadas.");
+    throw new Error("O modelo nÃ£o retornou a imagem processada. Tente reduzir o nÃºmero de opÃ§Ãµes selecionadas.");
   } catch (error: any) {
     console.error("Gemini Image Enhancement Error:", error);
-    throw new Error(error.message || "Não foi possível melhorar a imagem agora.");
+    throw new Error(error.message || "NÃ£o foi possÃ­vel melhorar a imagem agora.");
   }
 };
 
 export const animateImage = async (config: AnimationConfig, onProgress?: (msg: string) => void): Promise<string> => {
-  // Obrigatório: Novo cliente por chamada para capturar a chave ativa
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  // ObrigatÃ³rio: Novo cliente por chamada para capturar a chave ativa
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || 'FAKE_API_KEY_FOR_DEVELOPMENT' });
   const base64Data = config.image.split(',')[1] || config.image;
   
-  // Customização do prompt para influenciar a duração e fluidez
+  // CustomizaÃ§Ã£o do prompt para influenciar a duraÃ§Ã£o e fluidez
   const finalPrompt = `${config.prompt}. The animation must be smooth and feel like it lasts exactly ${config.duration} seconds. Focus on cinematic realism.`;
 
   try {
@@ -137,7 +137,7 @@ export const animateImage = async (config: AnimationConfig, onProgress?: (msg: s
 
     onProgress?.("IA analisando cena e texturas...");
 
-    // Polling da operação com mensagens dinâmicas
+    // Polling da operaÃ§Ã£o com mensagens dinÃ¢micas
     let pollCount = 0;
     while (!operation.done) {
       await new Promise(resolve => setTimeout(resolve, 10000));
@@ -146,9 +146,9 @@ export const animateImage = async (config: AnimationConfig, onProgress?: (msg: s
       try {
         operation = await ai.operations.getVideosOperation({ operation: operation });
         
-        if (pollCount === 2) onProgress?.("Iniciando renderização de quadros...");
-        if (pollCount === 5) onProgress?.(`Processando animação de ${config.duration}s...`);
-        if (pollCount > 8) onProgress?.("Otimizando compressão de vídeo...");
+        if (pollCount === 2) onProgress?.("Iniciando renderizaÃ§Ã£o de quadros...");
+        if (pollCount === 5) onProgress?.(`Processando animaÃ§Ã£o de ${config.duration}s...`);
+        if (pollCount > 8) onProgress?.("Otimizando compressÃ£o de vÃ­deo...");
       } catch (e: any) {
         if (e.message?.includes("404") || e.message?.includes("not found")) {
            throw new Error("ENTITY_NOT_FOUND");
@@ -158,12 +158,12 @@ export const animateImage = async (config: AnimationConfig, onProgress?: (msg: s
     }
 
     const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-    if (!downloadLink) throw new Error("O servidor não retornou um link de download válido.");
+    if (!downloadLink) throw new Error("O servidor nÃ£o retornou um link de download vÃ¡lido.");
 
     onProgress?.("Finalizando arquivo MP4...");
     
-    const response = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
-    if (!response.ok) throw new Error("Falha ao baixar vídeo gerado.");
+    const response = await fetch(`${downloadLink}&key=${process.env.API_KEY || 'FAKE_API_KEY_FOR_DEVELOPMENT'}`);
+    if (!response.ok) throw new Error("Falha ao baixar vÃ­deo gerado.");
     
     const videoBlob = await response.blob();
     const { data: { session } } = await supabase.auth.getSession();
@@ -175,7 +175,7 @@ export const animateImage = async (config: AnimationConfig, onProgress?: (msg: s
   } catch (error: any) {
     console.error("Video Gen Error:", error);
     if (error.message === "ENTITY_NOT_FOUND") {
-      throw new Error("CHAVE_INVALIDA: O projeto desta chave de API não possui acesso ao modelo Veo ou o faturamento está inativo.");
+      throw new Error("CHAVE_INVALIDA: O projeto desta chave de API nÃ£o possui acesso ao modelo Veo ou o faturamento estÃ¡ inativo.");
     }
     throw new Error(error.message || "Erro inesperado ao animar.");
   }
