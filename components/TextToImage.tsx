@@ -1,7 +1,9 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { generateImage } from '../services/geminiService';
+import { getQuotaStatus } from '../services/usageService';
 import { GenerationConfig, ImageStyle, AspectRatio } from '../types';
+import { supabase } from '../lib/supabase';
 
 interface TextToImageProps {
   onAnimateRequested?: (imageUrl: string) => void;
@@ -14,6 +16,19 @@ const TextToImage: React.FC<TextToImageProps> = ({ onAnimateRequested }) => {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [quotaInfo, setQuotaInfo] = useState<{ remaining: number, limit: number } | null>(null);
+
+  const fetchQuota = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user) {
+      const status = await getQuotaStatus(session.user.id, 'image');
+      setQuotaInfo({ remaining: status.remaining, limit: status.limit });
+    }
+  };
+
+  useEffect(() => {
+    fetchQuota();
+  }, []);
 
   const handleGenerate = async () => {
     if (!prompt.trim()) {
@@ -26,8 +41,9 @@ const TextToImage: React.FC<TextToImageProps> = ({ onAnimateRequested }) => {
     try {
       const imageUrl = await generateImage({ prompt, style, aspectRatio });
       setResult(imageUrl);
+      await fetchQuota(); // Atualiza contador após sucesso
     } catch (err: any) {
-      setError('Ocorreu um erro ao gerar a imagem. Verifique sua chave de API e tente novamente.');
+      setError(err.message || 'Ocorreu um erro ao gerar a imagem.');
       console.error(err);
     } finally {
       setLoading(false);
@@ -42,9 +58,23 @@ const TextToImage: React.FC<TextToImageProps> = ({ onAnimateRequested }) => {
     link.click();
   };
 
+  const isQuotaExhausted = quotaInfo !== null && quotaInfo.remaining === 0;
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start animate-fadeIn">
       <div className="lg:col-span-5 space-y-6 bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
+        
+        {/* Quota Indicator */}
+        <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-100 dark:border-slate-700">
+           <div className="flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full ${isQuotaExhausted ? 'bg-red-500' : 'bg-emerald-500 animate-pulse'}`}></div>
+              <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Créditos de Imagem</span>
+           </div>
+           <span className={`text-xs font-black ${isQuotaExhausted ? 'text-red-500' : 'text-brand-purple'}`}>
+             {quotaInfo ? `${quotaInfo.remaining} / ${quotaInfo.limit}` : '...'}
+           </span>
+        </div>
+
         <div>
           <label className="block text-sm font-semibold mb-2 text-slate-700 dark:text-slate-300">
             Descrição da Imagem
@@ -52,8 +82,9 @@ const TextToImage: React.FC<TextToImageProps> = ({ onAnimateRequested }) => {
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
+            disabled={loading || isQuotaExhausted}
             placeholder="Ex: Um astronauta andando em um campo de lavanda no planeta Marte..."
-            className="w-full h-32 px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-brand-purple outline-none transition-all resize-none text-sm"
+            className="w-full h-32 px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-brand-purple outline-none transition-all resize-none text-sm disabled:opacity-50"
           />
         </div>
 
@@ -64,8 +95,9 @@ const TextToImage: React.FC<TextToImageProps> = ({ onAnimateRequested }) => {
             </label>
             <select
               value={style}
+              disabled={loading || isQuotaExhausted}
               onChange={(e) => setStyle(e.target.value as ImageStyle)}
-              className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:ring-2 focus:ring-brand-purple outline-none"
+              className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:ring-2 focus:ring-brand-purple outline-none disabled:opacity-50"
             >
               <option value="realistic">Realista</option>
               <option value="artistic">Artístico</option>
@@ -80,8 +112,9 @@ const TextToImage: React.FC<TextToImageProps> = ({ onAnimateRequested }) => {
             </label>
             <select
               value={aspectRatio}
+              disabled={loading || isQuotaExhausted}
               onChange={(e) => setAspectRatio(e.target.value as AspectRatio)}
-              className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:ring-2 focus:ring-brand-purple outline-none"
+              className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:ring-2 focus:ring-brand-purple outline-none disabled:opacity-50"
             >
               <option value="1:1">1:1 (Feed)</option>
               <option value="4:5">4:5 (Instagram)</option>
@@ -97,11 +130,17 @@ const TextToImage: React.FC<TextToImageProps> = ({ onAnimateRequested }) => {
           </div>
         )}
 
+        {isQuotaExhausted && (
+          <div className="p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl text-amber-700 dark:text-amber-400 text-xs font-medium text-center">
+             Você atingiu o limite de 50 imagens hoje. Volte amanhã para mais criações gratuitas!
+          </div>
+        )}
+
         <button
           onClick={handleGenerate}
-          disabled={loading}
+          disabled={loading || isQuotaExhausted}
           className={`w-full py-4 rounded-xl font-display font-semibold text-white transition-all flex items-center justify-center gap-2 shadow-lg ${
-            loading 
+            loading || isQuotaExhausted
               ? 'bg-slate-400 cursor-not-allowed' 
               : 'bg-gradient-to-r from-brand-purple to-brand-blue hover:opacity-90 active:scale-95 shadow-brand-purple/20'
           }`}
@@ -119,7 +158,7 @@ const TextToImage: React.FC<TextToImageProps> = ({ onAnimateRequested }) => {
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
               </svg>
-              Gerar Imagem
+              {isQuotaExhausted ? 'Limite Diário Atingido' : 'Gerar Imagem'}
             </>
           )}
         </button>
@@ -130,7 +169,7 @@ const TextToImage: React.FC<TextToImageProps> = ({ onAnimateRequested }) => {
           <div className="text-center p-8">
             <div className="w-20 h-20 bg-slate-200 dark:bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4">
               <svg className="w-10 h-10 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
             </div>
             <h3 className="text-lg font-semibold text-slate-600 dark:text-slate-400">Sua criação aparecerá aqui</h3>
@@ -166,7 +205,7 @@ const TextToImage: React.FC<TextToImageProps> = ({ onAnimateRequested }) => {
                     title="Animar"
                   >
                     <svg className="w-6 h-6 text-brand-blue" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                   </button>
@@ -179,28 +218,6 @@ const TextToImage: React.FC<TextToImageProps> = ({ onAnimateRequested }) => {
                   <svg className="w-6 h-6 text-brand-purple" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                   </svg>
-                </button>
-              </div>
-            </div>
-            <div className="mt-4 w-full flex justify-between items-center px-2">
-              <span className="text-xs text-slate-500 font-medium">Gerado com PixelMind AI</span>
-              <div className="flex gap-4">
-                 {onAnimateRequested && (
-                   <button 
-                    onClick={() => onAnimateRequested(result)}
-                    className="text-sm font-semibold text-brand-blue hover:underline flex items-center gap-1"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                    </svg>
-                    Dar Vida
-                  </button>
-                 )}
-                <button 
-                  onClick={downloadImage}
-                  className="text-sm font-semibold text-brand-purple hover:underline"
-                >
-                  Baixar PNG
                 </button>
               </div>
             </div>

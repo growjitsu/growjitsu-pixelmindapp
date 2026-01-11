@@ -1,18 +1,23 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { GenerationConfig, EnhancementConfig, AnimationConfig } from "../types";
-import { logUsage } from "./usageService";
+import { getQuotaStatus, incrementUsage } from "./usageService";
 import { supabase } from "../lib/supabase";
 
-/**
- * Nota Técnica: Sempre criamos uma nova instância do cliente antes da chamada
- * para garantir o uso da API Key mais recente injetada pelo diálogo de seleção.
- */
 const getGeminiClient = () => {
   return new GoogleGenAI({ apiKey: process.env.API_KEY });
 };
 
 export const generateImage = async (config: GenerationConfig): Promise<string> => {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user) throw new Error("Usuário não autenticado.");
+
+  // Verificar Quota
+  const quota = await getQuotaStatus(session.user.id, 'image');
+  if (!quota.allowed) {
+    throw new Error(`Limite diário atingido! Você já usou suas ${quota.limit} imagens de hoje. O limite reseta em 24h.`);
+  }
+
   const ai = getGeminiClient();
   const stylePrompt = {
     realistic: "in a highly detailed realistic cinematic style, professional lighting",
@@ -40,10 +45,7 @@ export const generateImage = async (config: GenerationConfig): Promise<string> =
 
     for (const part of response.candidates?.[0]?.content?.parts || []) {
       if (part.inlineData) {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user) {
-          logUsage(session.user.id, 'image_generation');
-        }
+        await incrementUsage(session.user.id, 'image');
         return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
       }
     }
@@ -55,17 +57,23 @@ export const generateImage = async (config: GenerationConfig): Promise<string> =
 };
 
 export const enhanceImage = async (base64Image: string, mimeType: string, config: EnhancementConfig): Promise<string> => {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user) throw new Error("Usuário não autenticado.");
+
+  // Melhorar conta como uso de imagem
+  const quota = await getQuotaStatus(session.user.id, 'image');
+  if (!quota.allowed) {
+    throw new Error(`Limite diário atingido! Você não possui créditos de imagem para realizar melhorias hoje.`);
+  }
+
   const ai = getGeminiClient();
   const enhancements = [];
-  
-  // Mapeamento de instruções detalhadas para o modelo
   if (config.upscale) enhancements.push("increase resolution and reconstruct missing details for high definition");
   if (config.sharpen) enhancements.push("apply professional sharpening and clarify blurry edges");
   if (config.denoise) enhancements.push("remove digital noise, grain and compression artifacts");
   if (config.colorAdjust) enhancements.push("optimize dynamic range, vibrant colors and professional lighting balance");
   if (config.faceEnhance) enhancements.push("detect faces and restore skin texture, eyes and facial features with high fidelity");
 
-  // Prompt mais "autoritário" para forçar a edição da imagem
   const enhancementPrompt = `Act as a professional high-end photo editor. Your task is to process the attached image applying exactly these enhancements: ${enhancements.join(", ")}. 
   YOU MUST RETURN THE MODIFIED IMAGE. Do not change the fundamental composition, only improve the quality according to the instructions.`;
   
@@ -82,20 +90,15 @@ export const enhanceImage = async (base64Image: string, mimeType: string, config
       }
     });
 
-    // Procura especificamente por partes que contenham inlineData (a imagem editada)
     if (response.candidates && response.candidates[0].content.parts) {
       for (const part of response.candidates[0].content.parts) {
         if (part.inlineData) {
-          const { data: { session } } = await supabase.auth.getSession();
-          if (session?.user) {
-            logUsage(session.user.id, 'image_enhancement');
-          }
+          await incrementUsage(session.user.id, 'image');
           return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
         }
       }
     }
-    
-    throw new Error("O modelo não retornou a imagem processada. Tente reduzir o número de opções selecionadas.");
+    throw new Error("O modelo não retornou a imagem processada.");
   } catch (error: any) {
     console.error("Gemini Image Enhancement Error:", error);
     throw new Error(error.message || "Não foi possível melhorar a imagem agora.");
@@ -103,15 +106,21 @@ export const enhanceImage = async (base64Image: string, mimeType: string, config
 };
 
 export const animateImage = async (config: AnimationConfig, onProgress?: (msg: string) => void): Promise<string> => {
-  // Obrigatório: Novo cliente por chamada para capturar a chave ativa
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user) throw new Error("Usuário não autenticado.");
+
+  // Verificar Quota de Vídeo
+  const quota = await getQuotaStatus(session.user.id, 'video');
+  if (!quota.allowed) {
+    throw new Error(`Limite diário de vídeos atingido! Você já gerou ${quota.limit} vídeos hoje. Tente novamente amanhã.`);
+  }
+
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const base64Data = config.image.split(',')[1] || config.image;
-  
-  // Customização do prompt para influenciar a duração e fluidez
   const finalPrompt = `${config.prompt}. The animation must be smooth and feel like it lasts exactly ${config.duration} seconds. Focus on cinematic realism.`;
 
   try {
-    onProgress?.("Conectando ao PixelMind Veo Engine...");
+    onProgress?.("Verificando créditos de animação...");
     
     let operation;
     try {
@@ -135,47 +144,30 @@ export const animateImage = async (config: AnimationConfig, onProgress?: (msg: s
       throw e;
     }
 
-    onProgress?.("IA analisando cena e texturas...");
+    onProgress?.("IA gerando sua animação...");
 
-    // Polling da operação com mensagens dinâmicas
     let pollCount = 0;
     while (!operation.done) {
       await new Promise(resolve => setTimeout(resolve, 10000));
       pollCount++;
-      
-      try {
-        operation = await ai.operations.getVideosOperation({ operation: operation });
-        
-        if (pollCount === 2) onProgress?.("Iniciando renderização de quadros...");
-        if (pollCount === 5) onProgress?.(`Processando animação de ${config.duration}s...`);
-        if (pollCount > 8) onProgress?.("Otimizando compressão de vídeo...");
-      } catch (e: any) {
-        if (e.message?.includes("404") || e.message?.includes("not found")) {
-           throw new Error("ENTITY_NOT_FOUND");
-        }
-        throw e;
-      }
+      operation = await ai.operations.getVideosOperation({ operation: operation });
+      if (pollCount === 2) onProgress?.("Renderizando quadros de movimento...");
+      if (pollCount === 5) onProgress?.(`Processando animação de ${config.duration}s...`);
     }
 
     const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-    if (!downloadLink) throw new Error("O servidor não retornou um link de download válido.");
+    if (!downloadLink) throw new Error("O servidor não retornou um link de download.");
 
-    onProgress?.("Finalizando arquivo MP4...");
-    
+    onProgress?.("Download do vídeo final...");
     const response = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
-    if (!response.ok) throw new Error("Falha ao baixar vídeo gerado.");
-    
     const videoBlob = await response.blob();
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.user) {
-      logUsage(session.user.id, 'video_generation');
-    }
+    
+    await incrementUsage(session.user.id, 'video');
 
     return URL.createObjectURL(videoBlob);
   } catch (error: any) {
-    console.error("Video Gen Error:", error);
     if (error.message === "ENTITY_NOT_FOUND") {
-      throw new Error("CHAVE_INVALIDA: O projeto desta chave de API não possui acesso ao modelo Veo ou o faturamento está inativo.");
+      throw new Error("CHAVE_INVALIDA: O projeto desta chave não possui acesso ao modelo Veo.");
     }
     throw new Error(error.message || "Erro inesperado ao animar.");
   }
